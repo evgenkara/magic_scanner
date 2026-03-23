@@ -13,17 +13,19 @@ import 'package:path_provider/path_provider.dart';
 import 'package:screenshot/screenshot.dart';
 import 'dart:typed_data';
 import 'package:purchases_flutter/purchases_flutter.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 
 // --- НАСТРОЙКИ ---
-const String apiKey = 'AIzaSyCqPUsuI5F9d2SdW-OfkgazBkKzbB0gMoc'; 
+//const String apiKey = ''; 
 const String promoCode = 'CURE2026';
 
 final ValueNotifier<ThemeMode> _themeNotifier = ValueNotifier(ThemeMode.system);
 
 void main() async {
+  
   WidgetsFlutterBinding.ensureInitialized();
-
+  await dotenv.load(fileName: ".env");
   // Включаем логи, чтобы видеть в консоли, как идут платежи
   await Purchases.setLogLevel(LogLevel.debug);
   // Инициализируем кассу вашим ключом от RevenueCat
@@ -543,7 +545,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   Future<void> _analyzeImage() async {
     if (_image == null) return;
     setState(() => _isLoading = true);
-
+    final String apiKey = dotenv.env['AI_API_KEY'] ?? '';
     try {
       final model = GenerativeModel(model: 'gemma-3-27b-it', apiKey: apiKey);
       final imageBytes = await _image!.readAsBytes();

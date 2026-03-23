@@ -42,7 +42,7 @@ android {
     buildTypes {
         getByName("release") {
             // Добавьте эту строку:
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.getByName("debug")
             
             // Остальные настройки оставьте как были (обычно там minifyEnabled и т.д.)
             isMinifyEnabled = false
