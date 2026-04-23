@@ -249,6 +249,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
   bool _isSharingImage = false; // Для анимации загрузки на кнопке
   String _resultText = '';
   String _loadingText = 'Thinking...';
+  // Новые переменные для поддержки чата
+  ChatSession? _chatSession;
+  List<Map<String, String>> _chatHistory = []; // Хранит историю сообщений: {'role': 'user'/'model', 'text': '...'}
+  List<String> _smartChips = []; // Хранит текущие кнопки-подсказки
   
   String _selectedCategory = 'General';
   final Map<String, IconData> _categories = {
@@ -553,63 +557,36 @@ class _ScannerScreenState extends State<ScannerScreen> {
       String userQuestion = _questionController.text;
       String prompt = 'Role: You are an expert AI Assistant.\nLanguage: Respond strictly in "$_langCode".\nFormatting: Use Markdown.\n';
 
-      if (userQuestion.isNotEmpty) {
-        prompt += 
-            '\n🔴 IMPORTANT USER QUESTION: "$userQuestion"\n'
-            'Task: Answer the user question specifically and accurately based on the image.\n'
-            'Format: Use Markdown headers (##) and relevant emojis (like 💡, ⚠️, ✅) to make the text beautiful and easy to read.\n'
-            'After answering, provide a brief general description of the object.\n';
-      } else {
-        switch (_selectedCategory) {
-          case 'Food':
-            prompt += 
-              'Task: Identify the dish/food.\n'
-              'Structure:\n'
-              '## 🍽️ [Название блюда]\n(Описание)\n'
-              '## 📊 Калории и БЖУ\n(Калории на 100г, Белки/Жиры/Углеводы)\n'
-              '## 📝 Рецепт / Ингредиенты\n(Из чего состоит и как готовить)\n'
-              '## 🥗 Оценка пользы\n(Насколько это полезно?)';
-            break;
-          case 'Plant':
-            prompt += 
-              'Task: Identify the plant/mushroom.\n'
-              'Structure:\n'
-              '## 🌿 [Название растения]\n(Научное название)\n'
-              '## 💧 Уход\n(Как поливать, сколько нужно света)\n'
-              '## ⚠️ Безопасность\n(Ядовито ли для кошек/собак/детей?)\n'
-              '## 🌍 Происхождение\n(Где растет в природе?)';
-            break;
-          case 'Text':
-            prompt += 
-              'Task: Act as an OCR and Translator.\n'
-              'Structure:\n'
-              '## 📄 Оригинальный текст\n(Распознанный текст)\n'
-              '## 🌍 Перевод\n(Перевод на "$_langCode")\n'
-              '## 📌 Суть (Саммари)\n(О чем этот текст в 1 предложении)';
-            break;
-          default: 
-            prompt += 
-              'Task: Identify the object.\n'
-              'Structure:\n'
-              '## 🔍 [Что это]\n(Описание)\n'
-              '## 📊 Характеристики\n(Главные факты)\n'
-              '## 🛠️ Как использовать\n(Практическое применение)\n'
-              '## 💡 Интересный факт\n(Удивительная деталь)';
-        }
-      }
+      // ... (ЗДЕСЬ ОСТАЕТСЯ ВАШ СТАРЫЙ КОД ФОРМИРОВАНИЯ prompt В ЗАВИСИМОСТИ ОТ КАТЕГОРИИ) ...
 
-      final content = [Content.multi([TextPart(prompt), DataPart('image/jpeg', imageBytes)])];
-      final response = await model.generateContent(content);
+      // 1. Стартуем новую сессию чата (с пустой историей, так как это новое фото)
+      _chatSession = model.startChat(history: []);
+      
+      // 2. Отправляем фото и первый промпт
+      final content = Content.multi([TextPart(prompt), DataPart('image/jpeg', imageBytes)]);
+      final response = await _chatSession!.sendMessage(content);
+
+      // 3. Формируем умные подсказки в зависимости от выбранного режима
+      List<String> newChips = [];
+      if (_selectedCategory == 'Food') {
+        newChips = ['Подходит ли для кето?', 'Как это повлияет на сон?', 'Дай пошаговый рецепт'];
+      } else if (_selectedCategory == 'Plant') {
+        newChips = ['Как часто поливать?', 'Опасно для кошек?', 'Можно ли держать в спальне?'];
+      } else if (_selectedCategory == 'Text') {
+        newChips = ['Сделай саммари', 'Объясни простыми словами', 'В чем главная мысль?'];
+      }
 
       setState(() {
         _resultText = response.text ?? 'Error';
+        _chatHistory = [
+          {'role': 'model', 'text': _resultText} // Добавляем первый ответ ИИ в историю на экране
+        ];
+        _smartChips = newChips;
         _isLoading = false;
+        _questionController.clear(); // Очищаем поле ввода для новых вопросов
       });
 
-      // Сохраняем успешный результат
-      if (!_resultText.startsWith('Error')) {
-        await _saveToHistory(_resultText);
-      }
+      if (!_resultText.startsWith('Error')) await _saveToHistory(_resultText);
 
     } catch (e) {
       setState(() { _resultText = 'Error: $e'; _isLoading = false; });
@@ -619,6 +596,31 @@ class _ScannerScreenState extends State<ScannerScreen> {
   void _copyToClipboard() {
     Clipboard.setData(ClipboardData(text: _resultText));
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_uiStrings['copy']!), duration: const Duration(seconds: 1)));
+  }
+
+  Future<void> _sendFollowUpQuestion(String questionText) async {
+    if (_chatSession == null || questionText.isEmpty) return;
+
+    setState(() {
+      _isLoading = true;
+      _loadingText = _langCode == 'ru' ? 'Печатаю...' : 'Typing...';
+      _chatHistory.add({'role': 'user', 'text': questionText});
+      _smartChips.clear(); // Прячем кнопки, пока ИИ думает
+    });
+
+    try {
+      final response = await _chatSession!.sendMessage(Content.text(questionText));
+      
+      setState(() {
+        _chatHistory.add({'role': 'model', 'text': response.text ?? ''});
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _chatHistory.add({'role': 'model', 'text': 'Error: $e'});
+        _isLoading = false;
+      });
+    }
   }
 
   Future<void> _shareAsCard() async {
@@ -796,7 +798,46 @@ class _ScannerScreenState extends State<ScannerScreen> {
                        ],
                      ),
                      const Divider(),
-                     MarkdownBody(data: _resultText),
+                     Column(
+  crossAxisAlignment: CrossAxisAlignment.stretch,
+  children: [
+    // Вывод истории чата (чтобы читать диалог сверху вниз)
+    ..._chatHistory.map((msg) {
+      bool isUser = msg['role'] == 'user';
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isUser ? Theme.of(context).colorScheme.primaryContainer : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: isUser 
+            ? Text(msg['text']!, style: const TextStyle(fontWeight: FontWeight.bold))
+            : MarkdownBody(data: msg['text']!),
+      );
+    }),
+
+    const SizedBox(height: 15),
+
+    // Горизонтальная лента умных подсказок (Smart Chips)
+    if (_smartChips.isNotEmpty)
+      SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: _smartChips.map((chipText) {
+            return Padding(
+              padding: const EdgeInsets.only(right: 8.0),
+              child: ActionChip(
+                label: Text(chipText),
+                avatar: const Icon(Icons.chat_bubble_outline, size: 16),
+                onPressed: () => _sendFollowUpQuestion(chipText),
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+  ],
+),
                    ],
                  )
               else if (_resultText.startsWith('Error'))
